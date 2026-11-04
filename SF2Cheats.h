@@ -249,8 +249,24 @@ inline NSString *DiagnosticsText() {
         return @"il2cpp не найден. Меню не внутри работающего Unity-процесса или UnityFramework ещё не загрузился.";
 
     NSMutableString *out = [NSMutableString string];
+
+    // Class-level resolution, independent of any getter call — pinpoints
+    // whether this is a build/name mismatch (class itself missing) or a
+    // method mismatch (class found, getter didn't return an instance).
+    void *locClass = FindClass(cfg::kClsServiceLocator);
+    void *fhClass   = FindClass(cfg::kClsFightHolder);
+    [out appendFormat:@"Класс %s (локатор сервисов): %@\n", cfg::kClsServiceLocator, locClass ? @"найден" : @"НЕ найден"];
+    [out appendFormat:@"Класс %s: %@\n", cfg::kClsFightHolder, fhClass ? @"найден" : @"НЕ найден"];
+    if (locClass) {
+        void *m = rt().class_get_method_from_name(locClass, cfg::kMethodGetWallet, 0);
+        [out appendFormat:@"  метод %s: %@\n", cfg::kMethodGetWallet, m ? @"найден" : @"НЕ найден"];
+    }
+    if (!locClass || !fhClass) {
+        [out appendString:@"\n⚠️ Класс не найден — скорее всего dump.cs снят не с этой сборки игры (имена и смещения перегенерируются при каждой обфускации). Нужен новый дамп с ТЕКУЩЕГО UnityFramework.\n\n"];
+    }
+
     void *wallet = GetWallet();
-    [out appendFormat:@"Кошелёк: %@\n", wallet ? @"найден" : @"НЕ найден"];
+    [out appendFormat:@"Кошелёк (инстанс): %@\n", wallet ? @"найден" : @"НЕ найден"];
     if (wallet) {
         for (int i = 0; i < 4; i++) {
             int64_t v = ReadObsLong(wallet, cfg::kWalletCurrency[i]);
