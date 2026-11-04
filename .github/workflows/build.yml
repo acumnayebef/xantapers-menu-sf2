@@ -1,0 +1,49 @@
+name: Build dylib
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  DYLIB_NAME: XantapersMenu
+  MIN_IOS: "13.0"
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compile dylib (arm64, iOS SDK)
+        run: |
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          echo "SDK: $SDK"
+          xcrun --sdk iphoneos clang++ \
+            -arch arm64 \
+            -isysroot "$SDK" \
+            -miphoneos-version-min=$MIN_IOS \
+            -std=gnu++17 \
+            -x objective-c++ \
+            -fobjc-arc \
+            -O2 \
+            -I. \
+            -dynamiclib \
+            -install_name "@executable_path/Frameworks/$DYLIB_NAME.dylib" \
+            -framework UIKit -framework Foundation -framework CoreGraphics -framework QuartzCore \
+            Tweak.mm \
+            -o "$DYLIB_NAME.dylib"
+
+      - name: Ad-hoc sign and verify
+        run: |
+          codesign -f -s - "$DYLIB_NAME.dylib"
+          lipo -info "$DYLIB_NAME.dylib"
+          otool -L "$DYLIB_NAME.dylib"
+          ls -la "$DYLIB_NAME.dylib"
+
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.DYLIB_NAME }}
+          path: ${{ env.DYLIB_NAME }}.dylib
+          if-no-files-found: error
