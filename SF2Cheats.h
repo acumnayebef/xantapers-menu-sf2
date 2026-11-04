@@ -129,7 +129,10 @@ namespace cfg {
 
     // Obfuscated — WILL break on the next build; re-resolve from a fresh dump.
     static const char *kClsServiceLocator = "KLODPOJOFJC"; // holds static service singletons
-    static const char *kMethodGetWallet   = "get_BHEBNPJGODA"; // static -> CKFPDLNKHPM* (wallet)
+    // Property BHEBNPJGODA and its real accessor method have independent
+    // obfuscated names here — confirmed by exact text match in dump.cs, not
+    // by the get_<Prop> convention (which was wrong and cost a round-trip).
+    static const char *kMethodGetWallet   = "CLHBMOOGIID"; // static CKFPDLNKHPM CLHBMOOGIID() -> wallet
 
     // GNEIHFDOCGK (the active Fight object) — fighter slot offsets, dump-confirmed.
     // Semantics (which slot is the player vs the opponent) are UNCONFIRMED.
