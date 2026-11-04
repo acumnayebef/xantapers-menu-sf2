@@ -8,7 +8,7 @@
 // ───────────────────────── CONFIG ─────────────────────────
 static NSString *const kChannelHandle = @"xantapers";
 static NSString *const kMenuTitle     = @"Xantapers";
-static NSString *const kMenuVersion   = @"v0.4";
+static NSString *const kMenuVersion   = @"v0.5";
 static NSString *const kChannelBlurb  =
     @"Моды для iOS-игр. Новые версии меню, обновления и новости — в Telegram-канале.";
 static const CGFloat kFabSize     = 58.0;
@@ -428,10 +428,18 @@ typedef void (^XPTabBuilder)(UIView *host);
     UIStackView *st; [self makeTabScrollInto:host stack:&st];
     sf2::State &s = sf2::state();
     [st addArrangedSubview:[self cardWithViews:@[
-        [self switchRowTitle:@"Бесконечные монеты" hint:nil initialOn:s.infiniteCoins enabled:YES action:@selector(infiniteCoinsChanged:)],
-        [self switchRowTitle:@"Бесконечные гемы" hint:nil initialOn:s.infiniteGems enabled:YES action:@selector(infiniteGemsChanged:)],
-        [self switchRowTitle:@"Заморозить монеты" hint:nil initialOn:s.freezeCoins enabled:YES action:@selector(freezeCoinsChanged:)],
-        [self switchRowTitle:@"Заморозить гемы" hint:@"Проверено частично: поля кошелька найдены в дампе, но какое именно — монеты, а какое — гемы, подтверди во вкладке Game → Диагностика." initialOn:s.freezeGems enabled:YES action:@selector(freezeGemsChanged:)],
+        [self switchRowTitle:@"Бесконечные монеты"
+                         hint:@"Каждую секунду выставляет баланс монет (поле-кандидат [0] в Диагностике) на 999 999 999, перекрывая любую трату или начисление в игре."
+                    initialOn:s.infiniteCoins enabled:YES action:@selector(infiniteCoinsChanged:)],
+        [self switchRowTitle:@"Бесконечные гемы"
+                         hint:@"То же самое, но для поля-кандидата [1] (в Диагностике подписано Ruby/Gems?)."
+                    initialOn:s.infiniteGems enabled:YES action:@selector(infiniteGemsChanged:)],
+        [self switchRowTitle:@"Заморозить монеты"
+                         hint:@"Запоминает текущий баланс монет в момент включения и держит его неизменным, не давая игре его списать или начислить сверху."
+                    initialOn:s.freezeCoins enabled:YES action:@selector(freezeCoinsChanged:)],
+        [self switchRowTitle:@"Заморозить гемы"
+                         hint:@"То же самое для гемов. Поля кошелька найдены в дампе точно, а вот какое из них монеты, а какое гемы — подтверждай по изменению чисел во вкладке Game → Диагностика."
+                    initialOn:s.freezeGems enabled:YES action:@selector(freezeGemsChanged:)],
     ]]];
 }
 
@@ -444,9 +452,15 @@ typedef void (^XPTabBuilder)(UIView *host);
     UIStackView *st; [self makeTabScrollInto:host stack:&st];
     sf2::State &s = sf2::state();
     [st addArrangedSubview:[self cardWithViews:@[
-        [self switchRowTitle:@"Режим бога" hint:@"Проверено частично: держит кандидат-поле здоровья на максимуме. Если во время боя урон всё равно проходит — смотри Диагностику, возможно слоты бойцов перепутаны." initialOn:s.godMode enabled:YES action:@selector(godModeChanged:)],
-        [self switchRowTitle:@"Нет КД на магию" hint:@"Не подключено: поле заряда магии не найдено в дампе достаточно уверенно, чтобы его трогать. Нужен новый дамп или живой тест через Диагностику." initialOn:NO enabled:NO action:nil],
-        [self switchRowTitle:@"Убийство с одного удара" hint:@"Проверено частично: обнуляет кандидат-поле здоровья у противника каждый тик, пока бой идёт." initialOn:s.oneHitKill enabled:YES action:@selector(oneHitKillChanged:)],
+        [self switchRowTitle:@"Режим бога"
+                         hint:@"Каждую секунду ставит твоему бойцу (Slot A) здоровье-кандидат floatA на максимум и флаг-кандидат boolA в true. Если урон всё равно проходит — смотри Диагностику: возможно, слоты A/B перепутаны местами."
+                    initialOn:s.godMode enabled:YES action:@selector(godModeChanged:)],
+        [self switchRowTitle:@"Нет КД на магию"
+                         hint:@"Пока отключено: поле заряда/перезарядки магии не опознано в дампе достаточно уверенно, чтобы его трогать вслепую. Нужен ещё один прогон Диагностики во время использования магии."
+                    initialOn:NO enabled:NO action:nil],
+        [self switchRowTitle:@"Убийство с одного удара"
+                         hint:@"Каждую секунду обнуляет здоровье-кандидат floatA у противника (Slot B), пока бой идёт."
+                    initialOn:s.oneHitKill enabled:YES action:@selector(oneHitKillChanged:)],
     ]]];
 }
 
@@ -463,7 +477,9 @@ typedef void (^XPTabBuilder)(UIView *host);
     UIStackView *st; [self makeTabScrollInto:host stack:&st];
     sf2::State &s = sf2::state();
     [st addArrangedSubview:[self cardWithViews:@[
-        [self switchRowTitle:@"Заморозка врагов" hint:@"Не подтверждено: выставляет кандидат-флаг у противника, похожий на \u00abstun\u00bb. Проверь на боте в обычном бою и сверь с Диагностикой." initialOn:s.freezeEnemies enabled:YES action:@selector(freezeEnemiesChanged:)],
+        [self switchRowTitle:@"Заморозка врагов"
+                         hint:@"Каждую секунду ставит противнику (Slot B) флаг-кандидат boolB в true — похоже на флаг \u00abоглушён/заблокирован\u00bb, но это не подтверждено. Проверь на боте в обычном бою и сверь с Диагностикой."
+                    initialOn:s.freezeEnemies enabled:YES action:@selector(freezeEnemiesChanged:)],
     ]]];
 
     self.diagLabel = [[UILabel alloc] init];

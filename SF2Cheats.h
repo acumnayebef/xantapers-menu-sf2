@@ -356,8 +356,15 @@ inline void Tick() {
 inline void EnsureTimer() {
     State &s = state();
     if (s.timer) return;
-    dispatch_queue_t q = dispatch_queue_create("sf2.cheats.tick", DISPATCH_QUEUE_SERIAL);
-    s.timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, q);
+    // IMPORTANT: il2cpp's GC only knows about threads it has attached.
+    // il2cpp_thread_attach() is called once, lazily, by whichever thread
+    // first calls EnsureReady() — if that's the main thread (true here,
+    // since Diagnostics' NSTimer runs on it), every OTHER thread that then
+    // touches managed objects/calls runtime_invoke is unregistered and will
+    // crash the process, usually within a second or two. Running the tick
+    // on the main queue keeps every read/write on the one thread il2cpp
+    // already knows about, instead of re-implementing per-thread attach.
+    s.timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
     dispatch_source_set_timer(s.timer, dispatch_time(DISPATCH_TIME_NOW, 0), (uint64_t)(1.0 / 15.0 * NSEC_PER_SEC), (uint64_t)(0.01 * NSEC_PER_SEC));
     dispatch_source_set_event_handler(s.timer, ^{ Tick(); });
     dispatch_resume(s.timer);
