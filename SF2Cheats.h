@@ -18,6 +18,8 @@
 #import <Foundation/Foundation.h>
 #include <dlfcn.h>
 #include <stdint.h>
+#include <string>
+#include <unordered_map>
 
 // ───────────────────────── IL2CPP minimal shim ─────────────────────────
 // All il2cpp_* symbols are exported by the statically-linked libil2cpp
@@ -50,6 +52,13 @@ struct IL2Cpp {
     il2cpp_thread_attach_t thread_attach;
     void* domain = nullptr;
     BOOL ready = NO;
+    // Resolved-class cache. FindClass() used to do a full linear scan over
+    // EVERY class in EVERY loaded assembly (easily thousands of types)
+    // on every single call — and it was being called twice per tick at
+    // 15Hz. That main-thread cost is almost certainly what made the app
+    // hang/get killed after the first fight. Classes don't unload during
+    // the process lifetime, so caching by name is safe.
+    std::unordered_map<std::string, void*> classCache;
 };
 
 inline IL2Cpp &rt() {
@@ -91,6 +100,8 @@ inline BOOL EnsureReady() {
 inline void *FindClass(const char *name) {
     IL2Cpp &r = rt();
     if (!EnsureReady()) return nullptr;
+    auto it = r.classCache.find(name);
+    if (it != r.classCache.end()) return it->second; // cache hit — no scan
     size_t n = 0;
     void **asms = r.domain_get_assemblies(r.domain, &n);
     for (size_t i = 0; i < n; i++) {
@@ -101,16 +112,31 @@ inline void *FindClass(const char *name) {
             void *klass = r.image_get_class(img, c);
             if (!klass) continue;
             const char *cn = r.class_get_name(klass);
-            if (cn && strcmp(cn, name) == 0) return klass;
+            if (cn && strcmp(cn, name) == 0) {
+                r.classCache[name] = klass; // cache hit next time, scan only once
+                return klass;
+            }
         }
     }
-    return nullptr;
+    return nullptr; // not cached: a genuine miss still re-scans next call,
+                     // which is fine since misses are diagnostic-only, not per-tick.
+}
+
+inline void *FindMethod(void *klass, const char *name) {
+    static std::unordered_map<void*, std::unordered_map<std::string, void*>> cache;
+    auto &byName = cache[klass];
+    auto it = byName.find(name);
+    if (it != byName.end()) return it->second;
+    void *m = rt().class_get_method_from_name(klass, name, 0);
+    byName[name] = m; // cache the miss too (null) — a name that isn't on
+                       // this class won't suddenly appear at runtime.
+    return m;
 }
 
 inline void *InvokeNoArg(void *klass, const char *method, void *obj) {
     if (!klass) return nullptr;
     IL2Cpp &r = rt();
-    void *m = r.class_get_method_from_name(klass, method, 0);
+    void *m = FindMethod(klass, method);
     if (!m) return nullptr;
     void *exc = nullptr;
     void *ret = r.runtime_invoke(m, obj, nullptr, &exc);
@@ -126,6 +152,15 @@ namespace cfg {
     static const char *kClsFightHolder   = "FightHolder";
     static const char *kMethodGetCurrent = "get_Current"; // static FightHolder -> FightHolder*
     static const char *kMethodGetFight   = "get_Fight";   // instance FightHolder -> GNEIHFDOCGK* (fight)
+
+    // Second, independent path straight to the live fight: GNEIHFDOCGK keeps
+    // its OWN static singleton (property MFALAJHBKCC) separate from
+    // FightHolder's. Confirmed by exact text match in dump.cs: it's the only
+    // zero-arg static method on the class returning GNEIHFDOCGK itself.
+    // Tried first since it may be populated earlier/more reliably than the
+    // FightHolder wrapper; falls back to FightHolder if null.
+    static const char *kClsFight            = "GNEIHFDOCGK";
+    static const char *kMethodGetFightDirect = "FNBGGABJLKJ"; // static GNEIHFDOCGK FNBGGABJLKJ()
 
     // Obfuscated — WILL break on the next build; re-resolve from a fresh dump.
     static const char *kClsServiceLocator = "KLODPOJOFJC"; // holds static service singletons
@@ -211,6 +246,11 @@ inline void *GetWallet() {
 }
 
 inline void *GetCurrentFight() {
+    void *fightClass = FindClass(cfg::kClsFight);
+    if (fightClass) {
+        void *direct = InvokeNoArg(fightClass, cfg::kMethodGetFightDirect, nullptr); // static -> GNEIHFDOCGK*
+        if (direct) return direct;
+    }
     void *fhClass = FindClass(cfg::kClsFightHolder);
     if (!fhClass) return nullptr;
     void *holder = InvokeNoArg(fhClass, cfg::kMethodGetCurrent, nullptr); // static -> FightHolder*
@@ -277,6 +317,9 @@ inline NSString *DiagnosticsText() {
         }
     }
 
+    void *fightClassDirect = FindClass(cfg::kClsFight);
+    void *fightDirect = fightClassDirect ? InvokeNoArg(fightClassDirect, cfg::kMethodGetFightDirect, nullptr) : nullptr;
+    [out appendFormat:@"  прямой путь (GNEIHFDOCGK.%s): %@\n", cfg::kMethodGetFightDirect, fightDirect ? @"найден" : @"null"];
     void *fight = GetCurrentFight();
     [out appendFormat:@"Бой: %@\n", fight ? @"идёт" : @"не найден (не в бою?)"];
     if (fight) {
