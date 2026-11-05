@@ -188,7 +188,9 @@ namespace cfg {
     // in that same order, which is a plausible but UNCONFIRMED positional match.
     static const uint32_t kWalletCurrency[4] = { 0x178, 0x198, 0x1B8, 0x1D8 };
     static const char    *kWalletCurrencyLabel[4] = { "Coins?", "Ruby/Gems?", "RaidCurr?", "Materials?" };
-    // Which indices the Money tab acts on — change once Diagnostics confirms them.
+    // CONFIRMED 2026-11-04: real in-game HUD showed 0 coins / 9 of the
+    // second currency at the exact moment Diagnostics read [0]=0 [1]=9 —
+    // direct match, not a guess anymore.
     static const int kCoinsIndex = 0;
     static const int kGemsIndex  = 1;
 }
@@ -206,9 +208,20 @@ inline int32_t ReadObsInt(void *obj, uint32_t off) {
     auto *o = (ObsInt *)((char *)obj + off);
     return o->hidden ^ o->key;
 }
+// ACTk's ObscuredInt/Float/Bool/Long each keep a second, PLAINTEXT shadow
+// copy ("fake") alongside the encrypted one specifically so the library can
+// detect external tampering: if fakeValueActive is on, ACTk periodically
+// compares decrypt(hidden,key) against fake and treats a mismatch as
+// cheating. Writing only `hidden` (as earlier versions of this file did)
+// leaves `fake` stale -> guaranteed mismatch -> whatever the game wires up
+// to that detector fires. This is almost certainly the fight-tab crash:
+// money fields crashed-free because Nekki likely leans on server-side
+// balance checks there instead of this client-side trap. Keeping `fake` in
+// sync defeats the detector cleanly, same as every real ACTk bypass does.
 inline void WriteObsInt(void *obj, uint32_t off, int32_t value) {
     auto *o = (ObsInt *)((char *)obj + off);
     o->hidden = value ^ o->key;
+    o->fake = value;
 }
 inline float ReadObsFloat(void *obj, uint32_t off) {
     auto *o = (ObsFloat *)((char *)obj + off);
@@ -220,6 +233,7 @@ inline void WriteObsFloat(void *obj, uint32_t off, float value) {
     auto *o = (ObsFloat *)((char *)obj + off);
     int32_t bits; memcpy(&bits, &value, 4);
     o->hidden = bits ^ o->key;
+    o->fake = value;
 }
 inline bool ReadObsBool(void *obj, uint32_t off) {
     auto *o = (ObsBool *)((char *)obj + off);
@@ -228,6 +242,7 @@ inline bool ReadObsBool(void *obj, uint32_t off) {
 inline void WriteObsBool(void *obj, uint32_t off, bool value) {
     auto *o = (ObsBool *)((char *)obj + off);
     o->hidden = (value ? 1 : 0) ^ o->key;
+    o->fake = value ? 1 : 0;
 }
 inline int64_t ReadObsLong(void *obj, uint32_t off) {
     auto *o = (ObsLong *)((char *)obj + off);
@@ -236,6 +251,7 @@ inline int64_t ReadObsLong(void *obj, uint32_t off) {
 inline void WriteObsLong(void *obj, uint32_t off, int64_t value) {
     auto *o = (ObsLong *)((char *)obj + off);
     o->hidden = value ^ o->key;
+    o->fake = value;
 }
 
 // ───────────────────────── Object resolution ─────────────────────────
@@ -358,6 +374,12 @@ static const int64_t kInfiniteAmount = 999999999;
 // typically populated first/last for the local player in SF2's internal
 // fight setup order); NOT confirmed. Flip these two if God Mode instead
 // freezes the enemy, based on what Diagnostics shows while you take damage.
+// CONFIRMED 2026-11-04 by a live fight log: Slot A's intA=1 / Slot B&C's
+// intA=0 (a clean 1-vs-0 side discriminator), and Slot A's floatA=0.616
+// (a plausible damaged-health ratio, <=1) vs Slot B/C's floatA=1.659
+// (>1, so NOT the same kind of value for them — still open). Slot B and
+// Slot C were byte-for-byte identical in that log, so there may only be
+// one real opponent slot with C as an alias; EnemyFighter uses B.
 inline void *SelfFighter(void *fight) { return FightSlot(fight, cfg::kFightSlotA); }
 inline void *EnemyFighter(void *fight) { return FightSlot(fight, cfg::kFightSlotB); }
 
