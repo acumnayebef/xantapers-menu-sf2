@@ -1,5 +1,5 @@
-// Xantapers menu v0.1 — UIKit only, no Substrate/Theos/Dobby required.
-// Build as dylib with ARC; frameworks: UIKit, Foundation.
+// Xantapers menu v0.6 — UIKit only, no Substrate/Theos/Dobby required.
+// Build as dylib with ARC; frameworks: UIKit, Foundation, CoreGraphics, QuartzCore.
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 #include "Icon.h"   // kXantapersIconB64 (cat avatar, 160x160 JPEG, base64)
@@ -8,16 +8,15 @@
 // ───────────────────────── CONFIG ─────────────────────────
 static NSString *const kChannelHandle = @"xantapers";
 static NSString *const kMenuTitle     = @"Xantapers";
-static NSString *const kMenuVersion   = @"v0.5";
-static NSString *const kChannelBlurb  =
-    @"Моды для iOS-игр. Новые версии меню, обновления и новости — в Telegram-канале.";
+static NSString *const kMenuVersion   = @"v0.6";
 static const CGFloat kFabSize     = 58.0;
 static const CGFloat kSidebarW    = 108.0;
 static const CGFloat kHeaderH     = 52.0;
 static NSString *const kOpacityKey = @"xp_menu_opacity";
+static NSString *const kAccentKey  = @"xp_menu_accent";
+static NSString *const kEffectKey  = @"xp_menu_effect";
+static NSString *const kLangKey    = @"xp_menu_lang";
 static const CGFloat kOpacityMin  = 0.20;   // menu never becomes fully invisible
-static NSString *const kAccentKey = @"xp_menu_accent";
-static NSString *const kEffectKey = @"xp_menu_effect";
 // ──────────────────────────────────────────────────────────
 
 static UIColor *XPHex(uint32_t h) {
@@ -25,33 +24,115 @@ static UIColor *XPHex(uint32_t h) {
                            green:((h >> 8) & 0xFF) / 255.0
                             blue:(h & 0xFF) / 255.0 alpha:1.0];
 }
+static UIColor *gAccent;
 #define XP_BG      XPHex(0x14121C)
 #define XP_SIDE    XPHex(0x0E0C14)
 #define XP_CARD    XPHex(0x1F1B2B)
-static UIColor *gAccent;   // current accent, set from presets
 #define XP_ACCENT  (gAccent ?: XPHex(0xE0408F))
-#define XP_ACCENT2 XPHex(0x4FC8F0)   // sky blue from the background
+#define XP_ACCENT2 XPHex(0x4FC8F0)
 #define XP_TEXT    XPHex(0xF4F2FA)
 #define XP_MUTED   XPHex(0x9A94B0)
 
-// Accent presets (index saved in NSUserDefaults)
-static NSArray<UIColor *> *XPPresets(void) {
-    return @[ XPHex(0xE0408F), XPHex(0x4FC8F0), XPHex(0x57D68D),
-              XPHex(0xFFB454), XPHex(0xA070FF), XPHex(0xFF5A5A) ];
+// ───────────────────────── Localization (RU / EN / AR) ─────────────────────────
+typedef NS_ENUM(NSInteger, XPLang) { XPLangRU = 0, XPLangEN = 1, XPLangAR = 2 };
+
+static XPLang gLang = XPLangRU;
+
+static XPLang XPDefaultLang(void) {
+    NSString *pref = [NSLocale.preferredLanguages firstObject] ?: @"ru";
+    if ([pref hasPrefix:@"ar"]) return XPLangAR;
+    if ([pref hasPrefix:@"ru"]) return XPLangRU;
+    return XPLangEN;
 }
 
-// small white dot used by the "Искры" effect (tinted by the emitter cell color)
-static UIImage *XPDot(void) {
-    static UIImage *img;
+static NSDictionary<NSString *, NSArray<NSString *> *> *XPStrings(void) {
+    static NSDictionary *d;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        UIGraphicsImageRenderer *r = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(16, 16)];
-        img = [r imageWithActions:^(UIGraphicsImageRendererContext *ctx) {
-            [UIColor.whiteColor setFill];
-            [[UIBezierPath bezierPathWithOvalInRect:CGRectMake(1, 1, 14, 14)] fill];
-        }];
+        // Each entry: @[ru, en, ar]
+        d = @{
+            @"tab.money":    @[@"Money", @"Money", @"الأموال"],
+            @"tab.player":   @[@"Player", @"Player", @"اللاعب"],
+            @"tab.creators": @[@"Creators", @"Creators", @"المنشئون"],
+            @"settings.title": @[@"Настройки", @"Settings", @"الإعدادات"],
+
+            @"money.infCoins.title": @[@"Бесконечные монеты", @"Infinite coins", @"عملات لا نهائية"],
+            @"money.infCoins.hint":  @[@"Каждую секунду выставляет баланс монет на максимум, перекрывая любую трату или начисление в игре.",
+                                        @"Pins the coin balance to the maximum every second, overriding any in-game spend or reward.",
+                                        @"يضبط رصيد العملات إلى الحد الأقصى كل ثانية، متجاوزًا أي إنفاق أو مكافأة داخل اللعبة."],
+            @"money.infGems.title": @[@"Бесконечные гемы", @"Infinite gems", @"جواهر لا نهائية"],
+            @"money.infGems.hint":  @[@"То же самое, но для второй валюты (гемы/рубины).",
+                                        @"Same idea, for the second currency (gems/rubies).",
+                                        @"نفس الفكرة، للعملة الثانية (الجواهر/الياقوت)."],
+            @"money.freezeCoins.title": @[@"Заморозить монеты", @"Freeze coins", @"تجميد العملات"],
+            @"money.freezeCoins.hint":  @[@"Запоминает текущий баланс монет при включении и держит его неизменным.",
+                                        @"Remembers the current coin balance when enabled and keeps it pinned there.",
+                                        @"يحفظ رصيد العملات الحالي عند التفعيل ويبقيه ثابتًا."],
+            @"money.freezeGems.title": @[@"Заморозить гемы", @"Freeze gems", @"تجميد الجواهر"],
+            @"money.freezeGems.hint":  @[@"То же самое для второй валюты.",
+                                        @"Same idea for the second currency.",
+                                        @"نفس الفكرة للعملة الثانية."],
+
+            @"player.god.title": @[@"Режим бога", @"God mode", @"وضع الإله"],
+            @"player.god.hint":  @[@"Каждую секунду держит здоровье твоего бойца на максимуме.",
+                                        @"Pins your fighter's health to the maximum every second.",
+                                        @"يبقي صحة مقاتلك عند الحد الأقصى كل ثانية."],
+            @"player.magic.title": @[@"Нет КД на магию", @"No magic cooldown", @"بدون تهدئة للسحر"],
+            @"player.magic.hint":  @[@"Пока отключено: поле заряда магии не опознано в дампе достаточно уверенно.",
+                                        @"Disabled for now: the magic-charge field wasn't identified confidently enough in the dump.",
+                                        @"معطّل حاليًا: لم يتم التعرف على حقل شحن السحر بثقة كافية في البيانات."],
+            @"player.ohk.title": @[@"Убийство с одного удара", @"One-hit kill", @"قتل بضربة واحدة"],
+            @"player.ohk.hint":  @[@"Каждую секунду обнуляет здоровье противника, пока бой идёт.",
+                                        @"Zeroes the opponent's health every second while the fight is active.",
+                                        @"يصفّر صحة الخصم كل ثانية أثناء استمرار القتال."],
+
+            @"settings.opacity.title": @[@"Прозрачность меню", @"Menu opacity", @"شفافية القائمة"],
+            @"settings.opacity.hint":  @[@"Меняется прозрачность фона меню. Текст и кнопки остаются читаемыми.",
+                                        @"Changes the menu background's transparency. Text and buttons stay readable.",
+                                        @"يغيّر شفافية خلفية القائمة. يبقى النص والأزرار واضحين للقراءة."],
+            @"settings.accent.title": @[@"Акцентный цвет", @"Accent color", @"اللون المميز"],
+            @"settings.effect.title": @[@"Эффект меню", @"Menu effect", @"تأثير القائمة"],
+            @"settings.effect.hint":  @[@"Эффект работает, пока меню открыто.",
+                                        @"The effect runs only while the menu is open.",
+                                        @"يعمل التأثير فقط أثناء فتح القائمة."],
+            @"settings.lang.title": @[@"Язык", @"Language", @"اللغة"],
+            @"settings.diag.title": @[@"Диагностика (для подтверждения полей)", @"Diagnostics (to confirm fields)", @"التشخيص (لتأكيد الحقول)"],
+            @"settings.diag.placeholder": @[@"Диагностика обновится через секунду...", @"Diagnostics will update in a second...", @"سيتم تحديث التشخيص خلال ثانية..."],
+            @"settings.diag.copy": @[@"Скопировать лог", @"Copy log", @"نسخ السجل"],
+
+            @"copied": @[@"Скопировано ✓", @"Copied ✓", @"تم النسخ ✓"],
+            @"creators.blurb": @[@"Моды для iOS-игр. Новые версии меню, обновления и новости — в Telegram-канале.",
+                                        @"iOS game mods. New menu versions, updates and news live on the Telegram channel.",
+                                        @"تعديلات لألعاب iOS. الإصدارات الجديدة للقائمة والتحديثات والأخبار على قناة تيليجرام."],
+            @"creators.openTelegram": @[@"Открыть Telegram", @"Open Telegram", @"فتح تيليجرام"],
+            @"creators.copyHandle": @[@"Копировать @%@", @"Copy @%@", @"نسخ @%@"],
+
+            @"effect.none":    @[@"Нет", @"None", @"بدون"],
+            @"effect.neon":    @[@"Неон", @"Neon", @"نيون"],
+            @"effect.wave":    @[@"Волна", @"Wave", @"موجة"],
+            @"effect.sparks":  @[@"Искры", @"Sparks", @"شرر"],
+            @"effect.scanner": @[@"Сканер", @"Scanner", @"ماسح"],
+            @"effect.corners": @[@"Уголки", @"Corners", @"زوايا"],
+        };
     });
-    return img;
+    return d;
+}
+
+static NSString *L(NSString *key) {
+    NSArray<NSString *> *v = XPStrings()[key];
+    if (!v) return key;
+    NSInteger i = gLang;
+    if (i < 0 || i >= (NSInteger)v.count) i = 0;
+    return v[i];
+}
+
+// SF Rounded where available; iOS substitutes the right system face for
+// Arabic script runs automatically, so this stays legible in all 3 languages
+// without bundling custom font files.
+static UIFont *XPFont(CGFloat size, UIFontWeight weight) {
+    UIFontDescriptor *base = [UIFont systemFontOfSize:size weight:weight].fontDescriptor;
+    UIFontDescriptor *rounded = [base fontDescriptorWithDesign:UIFontDescriptorSystemDesignRounded];
+    return [UIFont fontWithDescriptor:(rounded ?: base) size:size];
 }
 
 static UIImage *XPIcon(void) {
@@ -84,39 +165,59 @@ typedef void (^XPTabBuilder)(UIView *host);
 @property (nonatomic, strong) UIView *sidebar;
 @property (nonatomic, strong) UIView *content;
 @property (nonatomic, strong) UILabel *headerTitle;
+@property (nonatomic, strong) UIButton *gearButton;
 @property (nonatomic, strong) NSArray<NSDictionary *> *tabs;
 @property (nonatomic, strong) NSMutableArray<UIButton *> *tabButtons;
 @property (nonatomic, assign) NSInteger selected;
 @property (nonatomic, assign) BOOL open;
 @property (nonatomic, assign) BOOL fabPlaced;
-@property (nonatomic, strong) UIButton *gearButton;
-@property (nonatomic, strong) UILabel *opacityLabel;
 @property (nonatomic, assign) BOOL inSettings;
 @property (nonatomic, strong) UILabel *diagLabel;
 @property (nonatomic, strong) NSTimer *diagTimer;
 @property (nonatomic, assign) CGFloat menuOpacity;
 @property (nonatomic, assign) NSInteger accentIndex;
 @property (nonatomic, assign) NSInteger effectIndex;
+@property (nonatomic, strong) UILabel *opacityLabel;
 @property (nonatomic, strong) UIScrollView *settingsScroll;
 @property (nonatomic, strong) CAGradientLayer *fxGradient;
 @property (nonatomic, strong) CAShapeLayer *fxNeon;
 @property (nonatomic, strong) CAEmitterLayer *fxEmitter;
+@property (nonatomic, strong) CALayer *fxScanner;
+@property (nonatomic, strong) NSArray<CALayer *> *fxCorners;
 @end
 
 @implementation XPMenuVC
 
-#pragma mark - Tabs (add new tabs here)
+#pragma mark - Accent presets
+
+static NSArray<UIColor *> *XPPresets(void) {
+    return @[ XPHex(0xE0408F), XPHex(0x4FC8F0), XPHex(0x57D68D),
+              XPHex(0xFFB454), XPHex(0xA070FF), XPHex(0xFF5A5A) ];
+}
+
+static UIImage *XPDot(void) {
+    static UIImage *img;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        UIGraphicsImageRenderer *r = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(16, 16)];
+        img = [r imageWithActions:^(UIGraphicsImageRendererContext *ctx) {
+            [UIColor.whiteColor setFill];
+            [[UIBezierPath bezierPathWithOvalInRect:CGRectMake(1, 1, 14, 14)] fill];
+        }];
+    });
+    return img;
+}
+
+#pragma mark - Tabs (Money / Player / Creators)
 
 - (void)buildTabs {
     __weak __typeof(self) ws = self;
     self.tabs = @[
-        @{ @"title": @"Money",
+        @{ @"title": L(@"tab.money"),
            @"build": (XPTabBuilder)^(UIView *host) { [ws buildMoneyInto:host]; } },
-        @{ @"title": @"Player",
+        @{ @"title": L(@"tab.player"),
            @"build": (XPTabBuilder)^(UIView *host) { [ws buildPlayerInto:host]; } },
-        @{ @"title": @"Game",
-           @"build": (XPTabBuilder)^(UIView *host) { [ws buildGameInto:host]; } },
-        @{ @"title": @"Creators",
+        @{ @"title": L(@"tab.creators"),
            @"build": (XPTabBuilder)^(UIView *host) { [ws buildCreatorsInto:host]; } },
     ];
 }
@@ -131,14 +232,19 @@ typedef void (^XPTabBuilder)(UIView *host);
 
 - (void)viewDidLoad {
     [super viewDidLoad];
+
+    NSUserDefaults *ud = NSUserDefaults.standardUserDefaults;
+    NSNumber *langPref = [ud objectForKey:kLangKey];
+    gLang = langPref ? (XPLang)langPref.integerValue : XPDefaultLang();
+
     [self buildTabs];
-    NSNumber *saved = [NSUserDefaults.standardUserDefaults objectForKey:kOpacityKey];
+    NSNumber *saved = [ud objectForKey:kOpacityKey];
     self.menuOpacity = saved ? MAX(kOpacityMin, MIN(1.0, saved.doubleValue)) : 1.0;
-    NSInteger ai = [NSUserDefaults.standardUserDefaults integerForKey:kAccentKey];
+    NSInteger ai = [ud integerForKey:kAccentKey];
     self.accentIndex = (ai >= 0 && ai < (NSInteger)XPPresets().count) ? ai : 0;
     gAccent = XPPresets()[self.accentIndex];
-    NSInteger ei = [NSUserDefaults.standardUserDefaults integerForKey:kEffectKey];
-    self.effectIndex = (ei >= 0 && ei <= 3) ? ei : 0;
+    NSInteger ei = [ud integerForKey:kEffectKey];
+    self.effectIndex = (ei >= 0 && ei <= 5) ? ei : 0;
 
     // dim (tap outside to close)
     self.dim = [[UIView alloc] init];
@@ -179,7 +285,7 @@ typedef void (^XPTabBuilder)(UIView *host);
         b.frame = CGRectMake(8, y, kSidebarW - 16, 38);
         b.layer.cornerRadius = 11;
         b.tag = i;
-        b.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightBold];
+        b.titleLabel.font = XPFont(13, UIFontWeightBold);
         [b setTitle:[self.tabs[i][@"title"] uppercaseString] forState:UIControlStateNormal];
         [b addTarget:self action:@selector(tabTapped:) forControlEvents:UIControlEventTouchUpInside];
         [self.sidebar addSubview:b];
@@ -189,7 +295,7 @@ typedef void (^XPTabBuilder)(UIView *host);
 
     // header
     self.headerTitle = [[UILabel alloc] init];
-    self.headerTitle.font = [UIFont systemFontOfSize:20 weight:UIFontWeightBold];
+    self.headerTitle.font = XPFont(20, UIFontWeightBold);
     self.headerTitle.textColor = XP_TEXT;
     [self.panel addSubview:self.headerTitle];
 
@@ -301,12 +407,12 @@ typedef void (^XPTabBuilder)(UIView *host);
     self.panel.alpha = 0;
     self.panel.transform = CGAffineTransformMakeScale(0.92, 0.92);
     [self.view bringSubviewToFront:self.fab];
-    [self applyEffect];
     [UIView animateWithDuration:0.22 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
         self.dim.alpha = 1;
         self.panel.alpha = 1;
         self.panel.transform = CGAffineTransformIdentity;
     } completion:nil];
+    [self applyEffect];
 }
 
 - (void)closeMenu {
@@ -321,7 +427,9 @@ typedef void (^XPTabBuilder)(UIView *host);
         self.dim.hidden = YES;
         self.panel.hidden = YES;
         self.panel.transform = CGAffineTransformIdentity;
-        [self removeEffects];   // no animations running while the menu is closed
+        [self removeEffects];
+        [self.diagTimer invalidate];
+        self.diagTimer = nil;
     }];
 }
 
@@ -334,6 +442,8 @@ typedef void (^XPTabBuilder)(UIView *host);
     self.selected = i;
     self.inSettings = NO;
     [self updateGearState];
+    [self.diagTimer invalidate];
+    self.diagTimer = nil;
     for (UIButton *b in self.tabButtons) {
         BOOL on = (b.tag == i);
         b.backgroundColor = on ? [XP_ACCENT colorWithAlphaComponent:0.9] : UIColor.clearColor;
@@ -345,7 +455,7 @@ typedef void (^XPTabBuilder)(UIView *host);
     build(self.content);
 }
 
-#pragma mark - Switch row helper (used by Money / Player / Game)
+#pragma mark - Switch row helper
 
 - (UIView *)switchRowTitle:(NSString *)title
                        hint:(NSString *)hint
@@ -354,7 +464,7 @@ typedef void (^XPTabBuilder)(UIView *host);
                       action:(SEL)sel {
     UILabel *t = [[UILabel alloc] init];
     t.text = title;
-    t.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
+    t.font = XPFont(15, UIFontWeightSemibold);
     t.textColor = enabled ? XP_TEXT : XP_MUTED;
     t.translatesAutoresizingMaskIntoConstraints = NO;
     [t setContentHuggingPriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
@@ -380,7 +490,6 @@ typedef void (^XPTabBuilder)(UIView *host);
     ]];
 
     if (hint.length == 0) return row;
-
     UILabel *h = [self hintLabel:hint];
     h.translatesAutoresizingMaskIntoConstraints = NO;
     UIStackView *v = [[UIStackView alloc] initWithArrangedSubviews:@[row, h]];
@@ -428,18 +537,10 @@ typedef void (^XPTabBuilder)(UIView *host);
     UIStackView *st; [self makeTabScrollInto:host stack:&st];
     sf2::State &s = sf2::state();
     [st addArrangedSubview:[self cardWithViews:@[
-        [self switchRowTitle:@"Бесконечные монеты"
-                         hint:@"Каждую секунду выставляет баланс монет (поле-кандидат [0] в Диагностике) на 999 999 999, перекрывая любую трату или начисление в игре."
-                    initialOn:s.infiniteCoins enabled:YES action:@selector(infiniteCoinsChanged:)],
-        [self switchRowTitle:@"Бесконечные гемы"
-                         hint:@"То же самое, но для поля-кандидата [1] (в Диагностике подписано Ruby/Gems?)."
-                    initialOn:s.infiniteGems enabled:YES action:@selector(infiniteGemsChanged:)],
-        [self switchRowTitle:@"Заморозить монеты"
-                         hint:@"Запоминает текущий баланс монет в момент включения и держит его неизменным, не давая игре его списать или начислить сверху."
-                    initialOn:s.freezeCoins enabled:YES action:@selector(freezeCoinsChanged:)],
-        [self switchRowTitle:@"Заморозить гемы"
-                         hint:@"То же самое для гемов. Поля кошелька найдены в дампе точно, а вот какое из них монеты, а какое гемы — подтверждай по изменению чисел во вкладке Game → Диагностика."
-                    initialOn:s.freezeGems enabled:YES action:@selector(freezeGemsChanged:)],
+        [self switchRowTitle:L(@"money.infCoins.title") hint:L(@"money.infCoins.hint") initialOn:s.infiniteCoins enabled:YES action:@selector(infiniteCoinsChanged:)],
+        [self switchRowTitle:L(@"money.infGems.title") hint:L(@"money.infGems.hint") initialOn:s.infiniteGems enabled:YES action:@selector(infiniteGemsChanged:)],
+        [self switchRowTitle:L(@"money.freezeCoins.title") hint:L(@"money.freezeCoins.hint") initialOn:s.freezeCoins enabled:YES action:@selector(freezeCoinsChanged:)],
+        [self switchRowTitle:L(@"money.freezeGems.title") hint:L(@"money.freezeGems.hint") initialOn:s.freezeGems enabled:YES action:@selector(freezeGemsChanged:)],
     ]]];
 }
 
@@ -452,98 +553,10 @@ typedef void (^XPTabBuilder)(UIView *host);
     UIStackView *st; [self makeTabScrollInto:host stack:&st];
     sf2::State &s = sf2::state();
     [st addArrangedSubview:[self cardWithViews:@[
-        [self switchRowTitle:@"Режим бога"
-                         hint:@"Каждую секунду ставит твоему бойцу (Slot A) здоровье-кандидат floatA на максимум и флаг-кандидат boolA в true. Если урон всё равно проходит — смотри Диагностику: возможно, слоты A/B перепутаны местами."
-                    initialOn:s.godMode enabled:YES action:@selector(godModeChanged:)],
-        [self switchRowTitle:@"Нет КД на магию"
-                         hint:@"Пока отключено: поле заряда/перезарядки магии не опознано в дампе достаточно уверенно, чтобы его трогать вслепую. Нужен ещё один прогон Диагностики во время использования магии."
-                    initialOn:NO enabled:NO action:nil],
-        [self switchRowTitle:@"Убийство с одного удара"
-                         hint:@"Каждую секунду обнуляет здоровье-кандидат floatA у противника (Slot B), пока бой идёт."
-                    initialOn:s.oneHitKill enabled:YES action:@selector(oneHitKillChanged:)],
+        [self switchRowTitle:L(@"player.god.title") hint:L(@"player.god.hint") initialOn:s.godMode enabled:YES action:@selector(godModeChanged:)],
+        [self switchRowTitle:L(@"player.magic.title") hint:L(@"player.magic.hint") initialOn:NO enabled:NO action:nil],
+        [self switchRowTitle:L(@"player.ohk.title") hint:L(@"player.ohk.hint") initialOn:s.oneHitKill enabled:YES action:@selector(oneHitKillChanged:)],
     ]]];
-}
-
-#pragma mark - Game tab
-
-- (void)freezeEnemiesChanged:(UISwitch *)sw { sf2::SetFreezeEnemies(sw.on); }
-
-- (void)refreshDiagnostics {
-    if (!self.diagLabel) return;
-    self.diagLabel.text = sf2::DiagnosticsText();
-}
-
-- (void)buildGameInto:(UIView *)host {
-    UIStackView *st; [self makeTabScrollInto:host stack:&st];
-    sf2::State &s = sf2::state();
-    [st addArrangedSubview:[self cardWithViews:@[
-        [self switchRowTitle:@"Заморозка врагов"
-                         hint:@"Каждую секунду ставит противнику (Slot B) флаг-кандидат boolB в true — похоже на флаг \u00abоглушён/заблокирован\u00bb, но это не подтверждено. Проверь на боте в обычном бою и сверь с Диагностикой."
-                    initialOn:s.freezeEnemies enabled:YES action:@selector(freezeEnemiesChanged:)],
-    ]]];
-
-    self.diagLabel = [[UILabel alloc] init];
-    self.diagLabel.font = [UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightRegular];
-    self.diagLabel.textColor = XP_MUTED;
-    self.diagLabel.numberOfLines = 0;
-    self.diagLabel.text = @"Диагностика обновится через секунду...";
-
-    UIButton *copy = [self buttonTitle:@"Скопировать лог" primary:NO action:@selector(copyDiagnostics:)];
-
-    [st addArrangedSubview:[self cardWithViews:@[
-        [self cardTitle:@"Диагностика (для подтверждения полей)"],
-        self.diagLabel,
-        copy,
-    ]]];
-
-    [self.diagTimer invalidate];
-    self.diagTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(refreshDiagnostics) userInfo:nil repeats:YES];
-    [self refreshDiagnostics];
-}
-
-- (void)copyDiagnostics:(UIButton *)b {
-    UIPasteboard.generalPasteboard.string = self.diagLabel.text ?: @"";
-    NSString *old = [b titleForState:UIControlStateNormal];
-    [b setTitle:@"Скопировано ✓" forState:UIControlStateNormal];
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [b setTitle:old forState:UIControlStateNormal];
-    });
-}
-
-#pragma mark - Settings
-
-- (void)toggleSettings {
-    if (self.inSettings) [self selectTab:self.selected];
-    else [self showSettings];
-}
-
-- (void)updateGearState {
-    self.gearButton.backgroundColor = self.inSettings ? XP_ACCENT : XP_CARD;
-    self.gearButton.tintColor = self.inSettings ? UIColor.whiteColor : XP_TEXT;
-}
-
-- (void)showSettings {
-    self.inSettings = YES;
-    [self updateGearState];
-    for (UIButton *b in self.tabButtons) {
-        b.backgroundColor = UIColor.clearColor;
-        [b setTitleColor:XP_MUTED forState:UIControlStateNormal];
-    }
-    self.headerTitle.text = @"Настройки";
-    for (UIView *v in self.content.subviews) [v removeFromSuperview];
-    [self buildSettingsInto:self.content];
-}
-
-- (void)applyOpacity {
-    self.panel.backgroundColor   = [XP_BG   colorWithAlphaComponent:self.menuOpacity];
-    self.sidebar.backgroundColor = [XP_SIDE colorWithAlphaComponent:self.menuOpacity];
-}
-
-- (void)opacityChanged:(UISlider *)s {
-    self.menuOpacity = s.value;
-    [self applyOpacity];
-    self.opacityLabel.text = [NSString stringWithFormat:@"%d%%", (int)lround(s.value * 100)];
-    [NSUserDefaults.standardUserDefaults setDouble:s.value forKey:kOpacityKey];
 }
 
 #pragma mark - Accent
@@ -569,12 +582,15 @@ typedef void (^XPTabBuilder)(UIView *host);
     [self applyEffect];
 }
 
-#pragma mark - Effects (0 = off, 1 = Неон, 2 = Волна, 3 = Искры)
+#pragma mark - Effects (0 none, 1 Neon, 2 Wave, 3 Sparks, 4 Scanner, 5 Corners)
 
 - (void)removeEffects {
     [self.fxGradient removeFromSuperlayer]; self.fxGradient = nil;
     [self.fxNeon removeFromSuperlayer];     self.fxNeon = nil;
     [self.fxEmitter removeFromSuperlayer];  self.fxEmitter = nil;
+    [self.fxScanner removeFromSuperlayer];  self.fxScanner = nil;
+    for (CALayer *l in self.fxCorners) [l removeFromSuperlayer];
+    self.fxCorners = nil;
 }
 
 - (void)applyEffect {
@@ -582,7 +598,7 @@ typedef void (^XPTabBuilder)(UIView *host);
     if (!self.open || self.effectIndex == 0) return;
     CALayer *host = self.panel.layer;
 
-    if (self.effectIndex == 1) {            // Неон: pulsing inner glow on the border
+    if (self.effectIndex == 1) {            // Neon: pulsing inner glow on the border
         CAShapeLayer *n = [CAShapeLayer layer];
         n.fillColor = nil;
         n.strokeColor = XP_ACCENT.CGColor;
@@ -598,7 +614,7 @@ typedef void (^XPTabBuilder)(UIView *host);
         [n addAnimation:a forKey:@"pulse"];
         [host addSublayer:n];
         self.fxNeon = n;
-    } else if (self.effectIndex == 2) {     // Волна: light sweep across the panel
+    } else if (self.effectIndex == 2) {     // Wave: diagonal light sweep
         CAGradientLayer *g = [CAGradientLayer layer];
         g.colors = @[ (id)[XP_ACCENT colorWithAlphaComponent:0.0].CGColor,
                       (id)[XP_ACCENT colorWithAlphaComponent:0.32].CGColor,
@@ -613,7 +629,7 @@ typedef void (^XPTabBuilder)(UIView *host);
         [g addAnimation:a forKey:@"sweep"];
         [host addSublayer:g];
         self.fxGradient = g;
-    } else {                                // Искры: glowing dots drifting upward
+    } else if (self.effectIndex == 3) {     // Sparks: glowing dots drifting upward
         CAEmitterCell *c = [CAEmitterCell emitterCell];
         c.contents = (id)XPDot().CGImage;
         c.birthRate = 7;
@@ -621,7 +637,7 @@ typedef void (^XPTabBuilder)(UIView *host);
         c.velocity = 10;
         c.velocityRange = 8;
         c.emissionRange = (CGFloat)(2 * M_PI);
-        c.yAcceleration = -14;            // negative = up (layer y axis points down)
+        c.yAcceleration = -14;
         c.scale = 0.30;
         c.scaleRange = 0.22;
         c.alphaSpeed = -0.11;
@@ -632,6 +648,43 @@ typedef void (^XPTabBuilder)(UIView *host);
         e.renderMode = kCAEmitterLayerAdditive;
         [host addSublayer:e];
         self.fxEmitter = e;
+    } else if (self.effectIndex == 4) {     // Scanner: thin bright line sweeping top-to-bottom
+        CALayer *line = [CALayer layer];
+        line.backgroundColor = [XP_ACCENT colorWithAlphaComponent:0.9].CGColor;
+        line.shadowColor = XP_ACCENT.CGColor;
+        line.shadowOpacity = 0.9;
+        line.shadowRadius = 6;
+        line.shadowOffset = CGSizeZero;
+        [host addSublayer:line];
+        self.fxScanner = line;
+        CABasicAnimation *a = [CABasicAnimation animationWithKeyPath:@"position.y"];
+        a.fromValue = @(-4);
+        a.toValue = @(self.panel.bounds.size.height + 4);
+        a.duration = 2.4;
+        a.repeatCount = HUGE_VALF;
+        a.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+        [line addAnimation:a forKey:@"scan"];
+    } else {                                // Corners: four glowing dots pulsing in sequence
+        NSMutableArray<CALayer *> *corners = [NSMutableArray array];
+        for (int i = 0; i < 4; i++) {
+            CALayer *dot = [CALayer layer];
+            dot.backgroundColor = XP_ACCENT.CGColor;
+            dot.cornerRadius = 4;
+            dot.shadowColor = XP_ACCENT.CGColor;
+            dot.shadowOpacity = 1;
+            dot.shadowRadius = 8;
+            dot.shadowOffset = CGSizeZero;
+            dot.bounds = CGRectMake(0, 0, 8, 8);
+            [host addSublayer:dot];
+            CABasicAnimation *a = [CABasicAnimation animationWithKeyPath:@"opacity"];
+            a.fromValue = @0.25; a.toValue = @1.0; a.duration = 1.0;
+            a.autoreverses = YES; a.repeatCount = HUGE_VALF;
+            a.beginTime = CACurrentMediaTime() + i * 0.22;
+            a.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+            [dot addAnimation:a forKey:@"pulse"];
+            [corners addObject:dot];
+        }
+        self.fxCorners = corners;
     }
     [self layoutEffects];
 }
@@ -650,6 +703,19 @@ typedef void (^XPTabBuilder)(UIView *host);
         self.fxEmitter.emitterPosition = CGPointMake(b.size.width / 2, b.size.height + 4);
         self.fxEmitter.emitterSize = CGSizeMake(b.size.width, 1);
     }
+    if (self.fxScanner) {
+        self.fxScanner.bounds = CGRectMake(0, 0, b.size.width, 2);
+        self.fxScanner.position = CGPointMake(b.size.width / 2, self.fxScanner.position.y);
+        self.fxScanner.anchorPoint = CGPointMake(0.5, 0.5);
+    }
+    if (self.fxCorners.count == 4) {
+        CGFloat m = 10;
+        CGPoint pts[4] = {
+            CGPointMake(m, m), CGPointMake(b.size.width - m, m),
+            CGPointMake(m, b.size.height - m), CGPointMake(b.size.width - m, b.size.height - m)
+        };
+        for (int i = 0; i < 4; i++) self.fxCorners[i].position = pts[i];
+    }
     [CATransaction commit];
 }
 
@@ -659,13 +725,36 @@ typedef void (^XPTabBuilder)(UIView *host);
     [self applyEffect];
 }
 
-#pragma mark - Settings screen
+#pragma mark - Language
+
+- (void)languageChanged:(UISegmentedControl *)seg {
+    gLang = (XPLang)seg.selectedSegmentIndex;
+    [NSUserDefaults.standardUserDefaults setInteger:gLang forKey:kLangKey];
+    [self applyLanguage];
+}
+
+- (void)applyLanguage {
+    [self buildTabs]; // refreshes self.tabs[i][@"title"] with the new language
+    for (NSInteger i = 0; i < (NSInteger)self.tabButtons.count && i < (NSInteger)self.tabs.count; i++) {
+        [self.tabButtons[i] setTitle:[self.tabs[i][@"title"] uppercaseString] forState:UIControlStateNormal];
+    }
+    if (self.inSettings) {
+        self.headerTitle.text = L(@"settings.title");
+        [self showSettings];
+    } else {
+        self.headerTitle.text = self.tabs[self.selected][@"title"];
+        [self selectTab:self.selected];
+    }
+}
+
+#pragma mark - Settings
 
 - (UILabel *)cardTitle:(NSString *)t {
     UILabel *l = [[UILabel alloc] init];
     l.text = t;
-    l.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
+    l.font = XPFont(15, UIFontWeightSemibold);
     l.textColor = XP_TEXT;
+    l.numberOfLines = 0;
     return l;
 }
 
@@ -698,6 +787,54 @@ typedef void (^XPTabBuilder)(UIView *host);
     return card;
 }
 
+- (void)toggleSettings {
+    if (self.inSettings) [self selectTab:self.selected];
+    else [self showSettings];
+}
+
+- (void)updateGearState {
+    self.gearButton.backgroundColor = self.inSettings ? XP_ACCENT : XP_CARD;
+    self.gearButton.tintColor = self.inSettings ? UIColor.whiteColor : XP_TEXT;
+}
+
+- (void)showSettings {
+    self.inSettings = YES;
+    [self updateGearState];
+    for (UIButton *b in self.tabButtons) {
+        b.backgroundColor = UIColor.clearColor;
+        [b setTitleColor:XP_MUTED forState:UIControlStateNormal];
+    }
+    self.headerTitle.text = L(@"settings.title");
+    for (UIView *v in self.content.subviews) [v removeFromSuperview];
+    [self buildSettingsInto:self.content];
+}
+
+- (void)applyOpacity {
+    self.panel.backgroundColor   = [XP_BG   colorWithAlphaComponent:self.menuOpacity];
+    self.sidebar.backgroundColor = [XP_SIDE colorWithAlphaComponent:self.menuOpacity];
+}
+
+- (void)opacityChanged:(UISlider *)s {
+    self.menuOpacity = s.value;
+    [self applyOpacity];
+    self.opacityLabel.text = [NSString stringWithFormat:@"%d%%", (int)lround(s.value * 100)];
+    [NSUserDefaults.standardUserDefaults setDouble:s.value forKey:kOpacityKey];
+}
+
+- (void)refreshDiagnostics {
+    if (!self.diagLabel) return;
+    self.diagLabel.text = sf2::DiagnosticsText();
+}
+
+- (void)copyDiagnostics:(UIButton *)b {
+    UIPasteboard.generalPasteboard.string = self.diagLabel.text ?: @"";
+    NSString *old = [b titleForState:UIControlStateNormal];
+    [b setTitle:L(@"copied") forState:UIControlStateNormal];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [b setTitle:old forState:UIControlStateNormal];
+    });
+}
+
 - (void)buildSettingsInto:(UIView *)host {
     UIScrollView *sv = [[UIScrollView alloc] init];
     sv.translatesAutoresizingMaskIntoConstraints = NO;
@@ -725,8 +862,19 @@ typedef void (^XPTabBuilder)(UIView *host);
         [st.widthAnchor constraintEqualToAnchor:sv.frameLayoutGuide.widthAnchor constant:-36],
     ]];
 
+    // ── language
+    UISegmentedControl *langSeg = [[UISegmentedControl alloc] initWithItems:@[@"RU", @"EN", @"AR"]];
+    langSeg.selectedSegmentIndex = gLang;
+    langSeg.selectedSegmentTintColor = XP_ACCENT;
+    langSeg.backgroundColor = XP_SIDE;
+    UIFont *lf = XPFont(12, UIFontWeightSemibold);
+    [langSeg setTitleTextAttributes:@{ NSForegroundColorAttributeName: XP_MUTED, NSFontAttributeName: lf } forState:UIControlStateNormal];
+    [langSeg setTitleTextAttributes:@{ NSForegroundColorAttributeName: UIColor.whiteColor, NSFontAttributeName: lf } forState:UIControlStateSelected];
+    [langSeg addTarget:self action:@selector(languageChanged:) forControlEvents:UIControlEventValueChanged];
+    [st addArrangedSubview:[self cardWithViews:@[[self cardTitle:L(@"settings.lang.title")], langSeg]]];
+
     // ── opacity
-    UILabel *oTitle = [self cardTitle:@"Прозрачность меню"];
+    UILabel *oTitle = [self cardTitle:L(@"settings.opacity.title")];
     self.opacityLabel = [[UILabel alloc] init];
     self.opacityLabel.text = [NSString stringWithFormat:@"%d%%", (int)lround(self.menuOpacity * 100)];
     self.opacityLabel.font = [UIFont monospacedDigitSystemFontOfSize:15 weight:UIFontWeightSemibold];
@@ -747,8 +895,7 @@ typedef void (^XPTabBuilder)(UIView *host);
     sl.thumbTintColor = UIColor.whiteColor;
     [sl addTarget:self action:@selector(opacityChanged:) forControlEvents:UIControlEventValueChanged];
 
-    [st addArrangedSubview:[self cardWithViews:@[
-        oRow, sl, [self hintLabel:@"Меняется прозрачность фона меню. Текст и кнопки остаются читаемыми."]]]];
+    [st addArrangedSubview:[self cardWithViews:@[oRow, sl, [self hintLabel:L(@"settings.opacity.hint")]]]];
 
     // ── accent color
     NSArray<UIColor *> *presets = XPPresets();
@@ -769,29 +916,42 @@ typedef void (^XPTabBuilder)(UIView *host);
     swRow.axis = UILayoutConstraintAxisHorizontal;
     swRow.distribution = UIStackViewDistributionEqualSpacing;
     swRow.alignment = UIStackViewAlignmentCenter;
-    [st addArrangedSubview:[self cardWithViews:@[[self cardTitle:@"Акцентный цвет"], swRow]]];
+    [st addArrangedSubview:[self cardWithViews:@[[self cardTitle:L(@"settings.accent.title")], swRow]]];
 
     // ── effects
-    UISegmentedControl *seg = [[UISegmentedControl alloc] initWithItems:@[@"Нет", @"Неон", @"Волна", @"Искры"]];
+    NSArray<NSString *> *effNames = @[L(@"effect.none"), L(@"effect.neon"), L(@"effect.wave"),
+                                       L(@"effect.sparks"), L(@"effect.scanner"), L(@"effect.corners")];
+    UISegmentedControl *seg = [[UISegmentedControl alloc] initWithItems:effNames];
     seg.selectedSegmentIndex = self.effectIndex;
     seg.selectedSegmentTintColor = XP_ACCENT;
     seg.backgroundColor = XP_SIDE;
-    UIFont *sf = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
+    UIFont *sf = [UIFont systemFontOfSize:11 weight:UIFontWeightSemibold];
     [seg setTitleTextAttributes:@{ NSForegroundColorAttributeName: XP_MUTED, NSFontAttributeName: sf }
                        forState:UIControlStateNormal];
     [seg setTitleTextAttributes:@{ NSForegroundColorAttributeName: UIColor.whiteColor, NSFontAttributeName: sf }
                        forState:UIControlStateSelected];
     [seg addTarget:self action:@selector(effectChanged:) forControlEvents:UIControlEventValueChanged];
-    [st addArrangedSubview:[self cardWithViews:@[
-        [self cardTitle:@"Эффект меню"], seg,
-        [self hintLabel:@"Неон — пульсирующее свечение рамки. Волна — световая полоса. Искры — всплывающие точки. Работает, пока меню открыто."]]]];
+    [st addArrangedSubview:[self cardWithViews:@[[self cardTitle:L(@"settings.effect.title")], seg, [self hintLabel:L(@"settings.effect.hint")]]]];
+
+    // ── diagnostics (moved here from the old Game tab)
+    self.diagLabel = [[UILabel alloc] init];
+    self.diagLabel.font = [UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightRegular];
+    self.diagLabel.textColor = XP_MUTED;
+    self.diagLabel.numberOfLines = 0;
+    self.diagLabel.text = L(@"settings.diag.placeholder");
+    UIButton *copy = [self buttonTitle:L(@"settings.diag.copy") primary:NO action:@selector(copyDiagnostics:)];
+    [st addArrangedSubview:[self cardWithViews:@[[self cardTitle:L(@"settings.diag.title")], self.diagLabel, copy]]];
+
+    [self.diagTimer invalidate];
+    self.diagTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(refreshDiagnostics) userInfo:nil repeats:YES];
+    [self refreshDiagnostics];
 }
 
-#pragma mark - Creators tab
+#pragma mark - Buttons
 
 - (UIButton *)buttonTitle:(NSString *)title primary:(BOOL)primary action:(SEL)sel {
     UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
-    b.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
+    b.titleLabel.font = XPFont(15, UIFontWeightSemibold);
     [b setTitle:title forState:UIControlStateNormal];
     [b setTitleColor:primary ? UIColor.whiteColor : XP_TEXT forState:UIControlStateNormal];
     b.backgroundColor = primary ? XP_ACCENT : XP_CARD;
@@ -800,6 +960,8 @@ typedef void (^XPTabBuilder)(UIView *host);
     [b addTarget:self action:sel forControlEvents:UIControlEventTouchUpInside];
     return b;
 }
+
+#pragma mark - Creators tab
 
 - (void)buildCreatorsInto:(UIView *)host {
     UIScrollView *sv = [[UIScrollView alloc] init];
@@ -827,7 +989,6 @@ typedef void (^XPTabBuilder)(UIView *host);
         [st.widthAnchor constraintEqualToAnchor:sv.frameLayoutGuide.widthAnchor constant:-36],
     ]];
 
-    // channel card
     UIView *card = [[UIView alloc] init];
     card.backgroundColor = XP_CARD;
     card.layer.cornerRadius = 16;
@@ -842,16 +1003,16 @@ typedef void (^XPTabBuilder)(UIView *host);
 
     UILabel *name = [[UILabel alloc] init];
     name.text = kMenuTitle;
-    name.font = [UIFont systemFontOfSize:19 weight:UIFontWeightBold];
+    name.font = XPFont(19, UIFontWeightBold);
     name.textColor = XP_TEXT;
 
     UILabel *handle = [[UILabel alloc] init];
     handle.text = [@"@" stringByAppendingString:kChannelHandle];
-    handle.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
+    handle.font = XPFont(15, UIFontWeightSemibold);
     handle.textColor = XP_ACCENT2;
 
     UILabel *blurb = [[UILabel alloc] init];
-    blurb.text = kChannelBlurb;
+    blurb.text = L(@"creators.blurb");
     blurb.font = [UIFont systemFontOfSize:13];
     blurb.textColor = XP_MUTED;
     blurb.numberOfLines = 0;
@@ -877,8 +1038,8 @@ typedef void (^XPTabBuilder)(UIView *host);
     ]];
     [st addArrangedSubview:card];
 
-    [st addArrangedSubview:[self buttonTitle:@"Открыть Telegram" primary:YES action:@selector(openTelegram)]];
-    [st addArrangedSubview:[self buttonTitle:[NSString stringWithFormat:@"Копировать @%@", kChannelHandle]
+    [st addArrangedSubview:[self buttonTitle:L(@"creators.openTelegram") primary:YES action:@selector(openTelegram)]];
+    [st addArrangedSubview:[self buttonTitle:[NSString stringWithFormat:L(@"creators.copyHandle"), kChannelHandle]
                                      primary:NO action:@selector(copyHandle:)]];
 
     UILabel *ver = [[UILabel alloc] init];
@@ -901,7 +1062,7 @@ typedef void (^XPTabBuilder)(UIView *host);
 - (void)copyHandle:(UIButton *)b {
     UIPasteboard.generalPasteboard.string = [@"@" stringByAppendingString:kChannelHandle];
     NSString *old = [b titleForState:UIControlStateNormal];
-    [b setTitle:@"Скопировано ✓" forState:UIControlStateNormal];
+    [b setTitle:L(@"copied") forState:UIControlStateNormal];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         [b setTitle:old forState:UIControlStateNormal];
     });

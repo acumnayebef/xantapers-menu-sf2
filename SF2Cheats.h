@@ -363,7 +363,6 @@ struct State {
     BOOL infiniteCoins = NO, infiniteGems = NO, freezeCoins = NO, freezeGems = NO;
     int64_t frozenCoinsValue = 0, frozenGemsValue = 0;
     BOOL godMode = NO, oneHitKill = NO;
-    BOOL freezeEnemies = NO;
     dispatch_source_t timer = nil;
 };
 inline State &state() { static State s; return s; }
@@ -397,7 +396,7 @@ inline void Tick() {
         }
     }
 
-    if (s.godMode || s.oneHitKill || s.freezeEnemies) {
+    if (s.godMode || s.oneHitKill) {
         void *fight = GetCurrentFight();
         if (fight) {
             if (s.godMode) {
@@ -407,12 +406,9 @@ inline void Tick() {
                     WriteObsFloat(self, cfg::kFtrFloatA, 1.0f); // candidate health ratio, pinned to full
                 }
             }
-            if (s.oneHitKill || s.freezeEnemies) {
+            if (s.oneHitKill) {
                 void *enemy = EnemyFighter(fight);
-                if (enemy) {
-                    if (s.oneHitKill) WriteObsFloat(enemy, cfg::kFtrFloatA, 0.0f); // candidate health ratio -> 0
-                    if (s.freezeEnemies) WriteObsBool(enemy, cfg::kFtrBoolB, true); // candidate "stunned/locked" flag
-                }
+                if (enemy) WriteObsFloat(enemy, cfg::kFtrFloatA, 0.0f); // confirmed: zeroes opponent health
             }
         }
     }
@@ -451,6 +447,5 @@ inline void SetFreezeGems(BOOL on) {
 }
 inline void SetGodMode(BOOL on)      { EnsureTimer(); state().godMode = on; }
 inline void SetOneHitKill(BOOL on)   { EnsureTimer(); state().oneHitKill = on; }
-inline void SetFreezeEnemies(BOOL on){ EnsureTimer(); state().freezeEnemies = on; }
 
 } // namespace sf2
